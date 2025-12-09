@@ -1,34 +1,55 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import requests
 import json
-import uuid
 import os
+from json import JSONDecodeError
 
-CATALOGO_URL = "http://127.0.0.1:8001/produtos"
-PAGAMENTO_URL = "http://127.0.0.1:8003/pagamentos"
-ARQUIVO_PEDIDOS = "pedidos.json"
+app = FastAPI(title="Serviço de Pedidos")
 
-app = FastAPI()
+# ========================
+#    MODELOS
+# ========================
 
-# -------------------------
-# Funções auxiliares
-# -------------------------
+class ItemPedido(BaseModel):
+    id: int
+    quantidade: int
+
+# ========================
+#   ARQUIVO JSON LOCAL
+# ========================
+
+# Caminho absoluto do arquivo, sempre dentro de pedidos_service
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ARQUIVO_PEDIDOS = os.path.join(BASE_DIR, "pedidos.json")
+
 
 def carregar_pedidos():
-    """Carrega pedidos do arquivo."""
-    if os.path.exists(ARQUIVO_PEDIDOS):
+    """Carrega pedidos do arquivo JSON. Se não existir ou estiver quebrado, retorna lista vazia."""
+    if not os.path.exists(ARQUIVO_PEDIDOS):
+        # cria arquivo vazio padrão
+        with open(ARQUIVO_PEDIDOS, "w", encoding="utf-8") as f:
+            f.write("[]")
+        return []
+
+    try:
         with open(ARQUIVO_PEDIDOS, "r", encoding="utf-8") as f:
             return json.load(f)
-    return []
+    except JSONDecodeError:
+        # arquivo corrompido → reseta
+        with open(ARQUIVO_PEDIDOS, "w", encoding="utf-8") as f:
+            f.write("[]")
+        return []
+
 
 def salvar_pedidos(pedidos):
     """Salva lista completa de pedidos no arquivo."""
     with open(ARQUIVO_PEDIDOS, "w", encoding="utf-8") as f:
         json.dump(pedidos, f, indent=4, ensure_ascii=False)
 
-# -------------------------
-# Rotas
-# -------------------------
+# ========================
+#   ROTAS DO SISTEMA
+# ========================
 
 @app.get("/")
 def raiz():
@@ -39,69 +60,51 @@ def listar_pedidos():
     return carregar_pedidos()
 
 @app.get("/pedidos/{pedido_id}")
-def obter_pedido(pedido_id: str):
+def obter_pedido(pedido_id: int):
     pedidos = carregar_pedidos()
+    pedido = next((p for p in pedidos if p["id"] == pedido_id), None)
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    return pedido
 
-    for p in pedidos:
-        if p["id"] == pedido_id:
-            return p
-
-    raise HTTPException(status_code=404, detail="Pedido não encontrado")
 
 @app.post("/pedidos")
-def criar_pedido(itens: list):
+def criar_pedido(itens: list[ItemPedido]):
     """
-    Estrutura esperada:
+    Exemplo de body:
     [
-        {"id": 1, "quantidade": 2},
-        {"id": 3, "quantidade": 1}
+      {"id": 1, "quantidade": 2},
+      {"id": 3, "quantidade": 1}
     ]
     """
 
-    # 1) Obter produtos do catálogo
+    # 1) Consultar catálogo
     try:
-        resposta = requests.get(CATALOGO_URL)
-        produtos = resposta.json()
-    except:
-        raise HTTPException(status_code=500, detail="Erro ao consultar o catálogo")
+        resp = requests.get("http://127.0.0.1:8001/produtos")
+        produtos = resp.json()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Erro ao consultar catálogo")
 
-    # 2) Validar itens e calcular total
-    total = 0
+    # 2) Calcular total
+    total = 0.0
     for item in itens:
-        prod = next((p for p in produtos if p["id"] == item["id"]), None)
+        prod = next((p for p in produtos if p["id"] == item.id), None)
         if not prod:
-            raise HTTPException(status_code=400, detail=f"Produto ID {item['id']} inválido")
+            raise HTTPException(status_code=400, detail=f"Produto {item.id} não encontrado no catálogo")
+        total += float(prod["preco"]) * item.quantidade
 
-        total += prod["preco"] * item["quantidade"]
-
-    # 3) Criar pedido local
-    pedido = {
-        "id": str(uuid.uuid4()),
-        "itens": itens,
-        "total": total,
-        "status": "aguardando pagamento"
-    }
-
-    # 4) Enviar para o serviço de pagamento
-    pagamento_payload = {
-        "pedido_id": pedido["id"],
-        "total": total
-    }
-
-    try:
-        resposta_pg = requests.post(PAGAMENTO_URL, json=pagamento_payload)
-        pagamento = resposta_pg.json()
-
-        if pagamento["status_pagamento"] == "aprovado":
-            pedido["status"] = "pago"
-        else:
-            pedido["status"] = "pagamento recusado"
-
-    except:
-        pedido["status"] = "erro no serviço de pagamento"
-
-    # 5) Salvar pedido
+    # 3) Carregar pedidos existentes
     pedidos = carregar_pedidos()
+    novo_id = len(pedidos) + 1
+
+    pedido = {
+        "id": novo_id,
+        "total": total,
+        "status": "confirmado",   # por enquanto sempre confirmado
+        "itens": [item.dict() for item in itens]
+    }
+
+    # 4) Salvar
     pedidos.append(pedido)
     salvar_pedidos(pedidos)
 
