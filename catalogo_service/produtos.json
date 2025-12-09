@@ -1,0 +1,5 @@
+[
+  { "id": 1, "nome": "Hambúrguer", "preco": 20.0 },
+  { "id": 2, "nome": "Pizza", "preco": 35.0 },
+  { "id": 3, "nome": "Refrigerante", "preco": 6.0 }
+]
