@@ -4,9 +4,18 @@ import requests
 import json
 import os
 from json import JSONDecodeError
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Serviço de Pedidos")
+app = FastAPI(title="Serviço de Pedidos")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # ou a lista com 127.0.0.1:5500
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ========================
 #    MODELOS
 # ========================
